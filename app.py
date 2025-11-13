@@ -1,768 +1,542 @@
 import streamlit as st
 import json
-from datetime import datetime
-from io import BytesIO
 import re
-from transformers import pipeline, M2M100ForConditionalGeneration, M2M100Tokenizer
-import torch
-from typing import Dict, List, Optional
-import pandas as pd
-from langdetect import detect, LangDetectException
-import warnings
-warnings.filterwarnings('ignore')
+from io import BytesIO
+from datetime import datetime
+from typing import Dict, List, Tuple
+from collections import defaultdict
 
-# Page configuration
+import pandas as pd
+from rapidfuzz import fuzz, process
+import pdfplumber
+
+from transformers import pipeline
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.units import inch
+
+# ---------------------------
+# App Config (Dark Theme)
+# ---------------------------
 st.set_page_config(
-    page_title="Police Recognition Analytics",
+    page_title="Police Recognition Analytics (EN)",
     page_icon="🚔",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# Custom CSS for appealing UI with fixed text visibility
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        text-align: center;
-        padding: 20px;
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-    }
-    .info-box {
-        padding: 20px;
-        border-radius: 10px;
-        background-color: #e3f2fd;
-        border-left: 5px solid #1f77b4;
-        margin: 10px 0;
-        color: #1e3a8a;
-    }
-    .success-box {
-        padding: 15px;
-        border-radius: 10px;
-        background-color: #d4edda;
-        border-left: 5px solid #28a745;
-        margin: 10px 0;
-        color: #155724;
-    }
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 20px;
-        border-radius: 15px;
-        color: white;
-        text-align: center;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 24px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        padding-left: 20px;
-        padding-right: 20px;
-        background-color: #f0f2f6;
-        border-radius: 10px 10px 0 0;
-        color: #262730;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #1f77b4;
-        color: white !important;
-    }
-    
-    /* Fix for text area visibility */
-    .stTextArea textarea {
-        color: #262730 !important;
-        background-color: #ffffff !important;
-        border: 2px solid #cbd5e0 !important;
-    }
-    
-    /* Fix for text input visibility */
-    .stTextInput input {
-        color: #262730 !important;
-        background-color: #ffffff !important;
-        border: 2px solid #cbd5e0 !important;
-    }
-    
-    /* Ensure placeholder text is visible */
-    .stTextArea textarea::placeholder {
-        color: #718096 !important;
-    }
-    
-    .stTextInput input::placeholder {
-        color: #718096 !important;
-    }
-    
-    /* Fix radio buttons */
-    .stRadio > label {
-        color: #262730 !important;
-    }
-    
-    /* Fix general text color */
-    .element-container {
-        color: #262730 !important;
-    }
-    
-    /* Success message styling */
-    .stSuccess {
-        background-color: #d4edda !important;
-        color: #155724 !important;
-    }
-    
-    /* Error styling */
-    .stError {
-        background-color: #f8d7da !important;
-        color: #721c24 !important;
-    }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    .stApp { background: linear-gradient(135deg, #0F172A 0%, #0B1220 100%); font-family: 'Inter', sans-serif; }
+    .main-header { font-size: 2.6rem; font-weight: 700; text-align: center; padding: 24px;
+        background: linear-gradient(135deg, #60A5FA 0%, #A78BFA 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        text-shadow: 0 0 24px rgba(96,165,250,0.25); }
+    .card { background: #0B1324; border: 1px solid #1F2A44; border-radius: 12px; padding: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.25); }
+    .metric-card { background: linear-gradient(135deg, #3B82F6 0%, #8B5CF6 100%); padding: 22px; border-radius: 12px;
+        color: #fff; text-align: center; box-shadow: 0 8px 24px rgba(59,130,246,0.35); }
+    .metric-card h2,.metric-card p { color: #fff !important; margin: 0; }
+    .section-title { color: #E5E7EB; font-size: 1.25rem; font-weight: 700; margin-top: 8px; margin-bottom: 8px; }
+    .label { color: #93C5FD; font-weight: 600; }
+    .value { color: #E5E7EB; }
+    .info { background: linear-gradient(135deg, #1E3A8A 0%, #1E40AF 100%); border: 1px solid #3B82F6; color: #DBEAFE; padding: 14px; border-radius: 10px; }
+    .warn { background: linear-gradient(135deg, #92400E 0%, #B45309 100%); border: 1px solid #F59E0B; color: #FEF3C7; padding: 14px; border-radius: 10px; }
+    .ok { background: linear-gradient(135deg, #065F46 0%, #047857 100%); border: 1px solid #10B981; color: #D1FAE5; padding: 14px; border-radius: 10px; }
+    .stTextArea textarea, .stTextInput input { background-color: #0B1324 !important; color: #E5E7EB !important; border: 1.5px solid #1F2A44 !important; }
+    .stTextArea textarea:focus, .stTextInput input:focus { border-color: #60A5FA !important; box-shadow: 0 0 0 3px rgba(96,165,250,0.25) !important; }
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; background: #0B1324; padding: 8px; border-radius: 12px; border: 1px solid #1F2A44; }
+    .stTabs [data-baseweb="tab"] { background: #111C33; color: #E5E7EB; border-radius: 8px; border: 1px solid #1F2A44; }
+    .stTabs [aria-selected="true"] { background: linear-gradient(135deg, #3B82F6 0%, #8B5CF6 100%); color: #fff !important; border-color: #3B82F6; }
+    .stDownloadButton button, .stButton button { color: #fff !important; font-weight: 600; border-radius: 8px; border: none; }
+    .stButton button[kind="primary"] { background: linear-gradient(135deg, #3B82F6 0%, #8B5CF6 100%); }
+    .stDownloadButton button { background: linear-gradient(135deg, #059669 0%, #047857 100%); }
+    [data-testid="stSidebar"] { background: #0B1324; border-right: 1px solid #1F2A44; }
+    [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] p { color: #E5E7EB; }
+    .kv { margin-bottom: 6px; }
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
-if 'processed_data' not in st.session_state:
-    st.session_state.processed_data = []
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
+st.markdown('<div class="main-header">🚔 Police Recognition Analytics — English Only</div>', unsafe_allow_html=True)
 
-# Language code mapping
-LANG_CODE_MAP = {
-    'hi': 'Hindi',
-    'bn': 'Bengali',
-    'te': 'Telugu',
-    'ta': 'Tamil',
-    'mr': 'Marathi',
-    'gu': 'Gujarati',
-    'kn': 'Kannada',
-    'ml': 'Malayalam',
-    'pa': 'Punjabi',
-    'or': 'Odia',
-    'as': 'Assamese',
-    'en': 'English',
-    'ur': 'Urdu',
-    'ne': 'Nepali',
-    'si': 'Sinhala',
-    'es': 'Spanish',
-    'fr': 'French',
-    'de': 'German',
-    'zh-cn': 'Chinese',
-    'ja': 'Japanese',
-    'ko': 'Korean',
-    'ar': 'Arabic'
+# ---------------------------
+# Configurable file paths (relative to repo root)
+# ---------------------------
+DATA_PATHS = {
+    "ipc": "OdishaIPCCrimedata.json",         # ontology of IPC labels/sections
+    "districts": "DistrictReport.json",       # district staffing & canonical names
+    "cctns": "mock_cctnsdata.json",           # case entries: district, station, officer_id
+    "feedback": "publicfeedback.json"         # public items for quick testing
 }
 
-# Cache models for performance
+# ---------------------------
+# Load Models (English only)
+# ---------------------------
 @st.cache_resource
 def load_models():
-    """Load all required ML models"""
-    try:
-        # Sentiment analysis model
-        sentiment_analyzer = pipeline(
-            "sentiment-analysis", 
-            model="distilbert-base-uncased-finetuned-sst-2-english",
-            device=-1
-        )
-        
-        # NER model for entity extraction - using multilingual model
-        ner_model = pipeline(
-            "ner", 
-            model="Davlan/xlm-roberta-base-ner-hrl",
-            aggregation_strategy="simple",
-            device=-1
-        )
-        
-        # Summarization model
-        summarizer = pipeline(
-            "summarization", 
-            model="facebook/bart-large-cnn",
-            device=-1
-        )
-        
-        # M2M100 for multilingual translation (supports 100 languages including Indic)
-        translation_model = M2M100ForConditionalGeneration.from_pretrained("facebook/m2m100_418M")
-        translation_tokenizer = M2M100Tokenizer.from_pretrained("facebook/m2m100_418M")
-        
-        # Q&A model
-        qa_model = pipeline(
-            "question-answering",
-            model="deepset/roberta-base-squad2",
-            device=-1
-        )
-        
-        return sentiment_analyzer, ner_model, summarizer, (translation_model, translation_tokenizer), qa_model
-    except Exception as e:
-        st.error(f"Error loading models: {str(e)}")
-        return None, None, None, None, None
+    sentiment = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english", device=-1)
+    summarizer = pipeline("summarization", model="facebook/bart-large-cnn", device=-1)
+    ner = pipeline("ner", model="dslim/bert-base-NER", aggregation_strategy="simple", device=-1)
+    qa = pipeline("question-answering", model="deepset/roberta-base-squad2", device=-1)
+    return sentiment, summarizer, ner, qa
 
-def detect_language(text: str) -> str:
-    """Detect language of text"""
-    try:
-        lang = detect(text)
-        return lang
-    except LangDetectException:
-        return "en"
+SENTIMENT, SUMMARIZER, NER, QA = load_models()
 
-def translate_to_english(text: str, translation_tuple) -> tuple:
-    """Translate non-English text to English using M2M100"""
+# ---------------------------
+# Utilities: load JSONs
+# ---------------------------
+def load_json_safely(path: str):
     try:
-        model, tokenizer = translation_tuple
-        detected_lang = detect_language(text)
-        
-        if detected_lang == 'en':
-            return text, 'en'
-        
-        # Map detected language to M2M100 format
-        lang_map = {
-            'hi': 'hi', 'bn': 'bn', 'te': 'te', 'ta': 'ta', 'mr': 'mr',
-            'gu': 'gu', 'kn': 'kn', 'ml': 'ml', 'pa': 'pa', 'or': 'or',
-            'ur': 'ur', 'ne': 'ne', 'si': 'si', 'es': 'es', 'fr': 'fr',
-            'de': 'de', 'zh-cn': 'zh', 'ja': 'ja', 'ko': 'ko', 'ar': 'ar'
-        }
-        
-        src_lang = lang_map.get(detected_lang, 'hi')
-        
-        # Set source language
-        tokenizer.src_lang = src_lang
-        
-        # Tokenize
-        encoded = tokenizer(text, return_tensors="pt", max_length=512, truncation=True)
-        
-        # Generate translation
-        generated_tokens = model.generate(
-            **encoded,
-            forced_bos_token_id=tokenizer.get_lang_id("en"),
-            max_length=512
-        )
-        
-        # Decode
-        translated = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)[0]
-        
-        return translated, detected_lang
-        
-    except Exception as e:
-        st.warning(f"Translation issue: {str(e)}. Using original text.")
-        return text, detect_language(text)
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
-def extract_officer_info(text: str, ner_model) -> Dict:
-    """Extract officer names and departments using NER"""
-    try:
-        entities = ner_model(text)
-        
-        officers = []
-        departments = []
-        locations = []
-        
-        for ent in entities:
-            entity_text = ent['word'].replace('▁', ' ').strip()
-            entity_type = ent['entity_group']
-            
-            if entity_type == 'PER':
-                # Check if it's likely an officer name
-                context_words = ['officer', 'constable', 'inspector', 'sergeant', 'detective', 
-                                'chief', 'captain', 'lieutenant', 'cop', 'police', 'asi', 'si', 'ci']
-                text_lower = text.lower()
-                if any(word in text_lower for word in context_words):
-                    officers.append(entity_text)
-            elif entity_type == 'ORG':
-                departments.append(entity_text)
-            elif entity_type == 'LOC':
-                locations.append(entity_text)
-        
-        # Enhanced pattern matching for officer names
-        officer_patterns = [
-            r'(?:Officer|Constable|Inspector|Sergeant|Detective|Chief|Captain|Lt\.|Sgt\.|ASI|SI|CI)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)',
-            r'(?:PC|DC|DI|DS|ASI|SI)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)',
-        ]
-        
-        for pattern in officer_patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            officers.extend(matches)
-        
-        # Department pattern matching
-        dept_patterns = [
-            r'(\d+(?:st|nd|rd|th)\s+(?:Precinct|District|Division|Station|Police\s+Station))',
-            r'([A-Z][a-z]+\s+(?:Police|Department|Precinct|Station|Thana))',
-        ]
-        
-        for pattern in dept_patterns:
-            matches = re.findall(pattern, text)
-            departments.extend(matches)
-        
-        return {
-            "officers": list(set([o.strip() for o in officers if o.strip()])),
-            "departments": list(set([d.strip() for d in departments if d.strip()])),
-            "locations": list(set([l.strip() for l in locations if l.strip()]))
-        }
-    except Exception as e:
-        st.warning(f"Entity extraction issue: {str(e)}")
-        return {"officers": [], "departments": [], "locations": []}
+IPC_DEF = load_json_safely(DATA_PATHS["ipc"])
+DISTRICTS_DEF = load_json_safely(DATA_PATHS["districts"])
+CCTNS_DEF = load_json_safely(DATA_PATHS["cctns"])
+FEEDBACK_DEF = load_json_safely(DATA_PATHS["feedback"])
 
-def analyze_sentiment_detailed(text: str, sentiment_analyzer) -> Dict:
-    """Perform sentiment analysis with detailed scores"""
-    try:
-        result = sentiment_analyzer(text[:512])[0]
-        
-        # Convert to normalized score between -1 and 1
-        if result['label'] == 'POSITIVE':
-            sentiment_score = result['score']
-        else:
-            sentiment_score = -result['score']
-        
-        return {
-            "label": result['label'],
-            "score": result['score'],
-            "normalized_score": sentiment_score
-        }
-    except Exception as e:
-        return {"label": "NEUTRAL", "score": 0.5, "normalized_score": 0.0}
+# ---------------------------
+# Build Ontologies / Gazetteers from your datasets
+# ---------------------------
+@st.cache_resource
+def build_ipc_map(ipc_json) -> Dict[str, Dict]:
+    """
+    Build a normalized IPC lookup from OdishaIPCCrimedata.json.
+    Expect either:
+      {"fields":[{"id":"fieldX","label":"<Crime> (Section ... IPC)"} ...]}
+    Returns dict[label_norm] = {"label":..., "sections":[...], "aliases":[...]}
+    """
+    mapping = {}
+    if not ipc_json:
+        return mapping
+    fields = ipc_json.get("fields", [])
+    for f in fields:
+        label = f.get("label", "").strip()
+        if not label:
+            continue
+        # Extract sections
+        sec = re.findall(r"Section\s+([0-9A-Z,\-\s]+)\s*IPC", label, flags=re.IGNORECASE)
+        sections = []
+        if sec:
+            # Normalize split by commas and ranges
+            raw = sec[0]
+            parts = re.split(r"[,\s]+", raw)
+            parts = [p.strip() for p in parts if p.strip()]
+            sections = parts
+        # Base name without section parentheses
+        base = re.sub(r"\(.*?\)", "", label).strip()
+        label_norm = base.lower()
+        aliases = {label_norm, base.lower(), label.lower()}
+        mapping[label_norm] = {"label": base, "sections": sections, "aliases": list(aliases)}
+    return mapping
 
-def extract_competency_tags(text: str) -> List[str]:
-    """Extract competency tags from text using keyword matching"""
-    competencies = {
-        "community_engagement": ["community", "engagement", "outreach", "relationship", "trust", "friendly", "neighbor", "public"],
-        "de-escalation": ["de-escalate", "calm", "peaceful", "resolved", "mediation", "conflict resolution", "defused", "pacified"],
-        "rapid_response": ["quick", "fast", "immediate", "prompt", "timely", "rapid", "swift", "rushed", "speedy"],
-        "professionalism": ["professional", "courteous", "respectful", "polite", "manner", "dignified", "conduct"],
-        "life_saving": ["saved", "rescue", "life-saving", "emergency", "critical", "revived", "resuscitated", "saved life"],
-        "investigation": ["investigation", "solved", "detective", "evidence", "case", "arrest", "caught", "nabbed"],
-        "compassion": ["compassion", "care", "kindness", "empathy", "understanding", "helped", "caring", "gentle", "sympathetic"],
-        "bravery": ["brave", "courage", "heroic", "danger", "risk", "fearless", "valor", "heroism"]
+@st.cache_resource
+def build_gazetteers(districts_json, cctns_json) -> Dict[str, List[str]]:
+    """
+    From DistrictReport.json and mock_cctnsdata.json build gazetteers:
+      - districts
+      - stations
+      - officers (from investigating_officer_id heuristics)
+    """
+    districts = []
+    if districts_json:
+        # DistrictReport.json may be a dict keyed by district
+        # with nested stats; use the keys as canonical district names
+        districts = list(districts_json.keys())
+
+    stations = []
+    officers = []
+    if cctns_json:
+        # Accept list of case dicts
+        if isinstance(cctns_json, list):
+            for row in cctns_json:
+                ps = row.get("police_station")
+                if ps:
+                    stations.append(ps)
+                oid = row.get("investigating_officer_id")
+                if oid:
+                    # Heuristic: split like "SI-JPatel" -> candidate "J Patel"
+                    # Also keep raw id as alias
+                    officers.append(oid)
+                    m = re.search(r"[A-Z]([a-z]+)?[-_]?([A-Z][a-z]+)", oid.replace(".", ""))
+                    if m:
+                        last = m.group(2)
+                        first = (m.group(1) or "").title()
+                        cand = f"{first} {last}".strip()
+                        if len(cand) > 1:
+                            officers.append(cand)
+        # Sometimes dict keyed
+        elif isinstance(cctns_json, dict):
+            for k, row in cctns_json.items():
+                if isinstance(row, dict):
+                    if row.get("police_station"):
+                        stations.append(row["police_station"])
+                    if row.get("investigating_officer_id"):
+                        officers.append(row["investigating_officer_id"])
+
+    # Deduplicate & sort
+    districts = sorted(set([d for d in districts if d]))
+    stations = sorted(set([s for s in stations if s]))
+    officers = sorted(set([o for o in officers if o]))
+
+    return {
+        "districts": districts,
+        "stations": stations,
+        "officers": officers
     }
-    
+
+IPC_MAP = build_ipc_map(IPC_DEF)
+GAZ = build_gazetteers(DISTRICTS_DEF, CCTNS_DEF)
+
+# ---------------------------
+# Normalizers & Extractors
+# ---------------------------
+RANK_WORDS = ["Officer", "Constable", "Inspector", "Sub-Inspector", "Sub Inspector", "Sergeant",
+              "Detective", "Chief", "Captain", "Lieutenant", "ASI", "SI", "PSI", "DSP", "ACP", "DCP", "CI", "HC"]
+
+def fuzzy_lookup(name: str, candidates: List[str], score_cutoff=85) -> Tuple[str, int]:
+    if not name or not candidates:
+        return "", 0
+    match = process.extractOne(name, candidates, scorer=fuzz.token_set_ratio, score_cutoff=score_cutoff)
+    if match:
+        return match[0], match[1]
+    return "", 0
+
+def extract_dates(text: str) -> List[str]:
+    # Simple date patterns: YYYY-MM-DD or DD/MM/YYYY or Month DD, YYYY
+    patterns = [
+        r"\b\d{4}-\d{2}-\d{2}\b",
+        r"\b\d{2}/\d{2}/\d{4}\b",
+        r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\s+\d{1,2},\s+\d{4}\b",
+    ]
+    found = set()
+    for pat in patterns:
+        for m in re.findall(pat, text, flags=re.IGNORECASE):
+            found.add(m)
+    return sorted(found)
+
+def extract_ipc(text: str, ipc_map: Dict[str, Dict]) -> List[Dict]:
     text_lower = text.lower()
-    found_tags = []
-    
-    for tag, keywords in competencies.items():
-        if any(keyword in text_lower for keyword in keywords):
-            found_tags.append(tag)
-    
-    return found_tags if found_tags else ["general_commendation"]
+    hits = []
+    # 1) Label presence
+    for key, meta in ipc_map.items():
+        if key and key in text_lower:
+            hits.append({"label": meta["label"], "sections": meta["sections"], "match": meta["label"]})
+    # 2) Direct "Section <num>" mentions
+    for m in re.findall(r"section\s+([0-9A-Z\-]+)", text, flags=re.IGNORECASE):
+        sec = m.upper()
+        # Find any label that includes this section
+        for key, meta in ipc_map.items():
+            if sec in [s.upper() for s in meta["sections"]]:
+                hits.append({"label": meta["label"], "sections": meta["sections"], "match": f"Section {sec}"})
+    # Deduplicate by label
+    uniq = {}
+    for h in hits:
+        uniq[h["label"]] = h
+    return list(uniq.values())
 
-def generate_summary(text: str, summarizer) -> str:
-    """Generate summary of the text"""
-    try:
-        if len(text) < 100:
-            return text
-        
-        text_to_summarize = text[:1024]
-        summary = summarizer(text_to_summarize, max_length=130, min_length=30, do_sample=False)
-        return summary[0]['summary_text']
-    except Exception as e:
-        return text[:200] + "..."
+def extract_entities_en(text: str) -> Dict[str, List[str]]:
+    ner_out = NER(text[:3000])  # cap for speed
+    persons, orgs, locs = [], [], []
+    for e in ner_out:
+        if e.get("entity_group") == "PER":
+            persons.append(e["word"].replace("▁", " ").strip())
+        elif e.get("entity_group") == "ORG":
+            orgs.append(e["word"].replace("▁", " ").strip())
+        elif e.get("entity_group") == "LOC":
+            locs.append(e["word"].replace("▁", " ").strip())
+    # Rank-pattern capture for officers
+    rank_pat = rf"(?:{'|'.join(RANK_WORDS)})\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)"
+    for m in re.findall(rank_pat, text):
+        persons.append(m.strip())
+    # Dedup
+    persons = sorted(set([p for p in persons if len(p) > 1]))
+    orgs = sorted(set([o for o in orgs if len(o) > 1]))
+    locs = sorted(set([l for l in locs if len(l) > 1]))
+    return {"persons": persons, "orgs": orgs, "locs": locs}
 
-def calculate_recognition_score(sentiment_score: float, tags: List[str], text_length: int) -> float:
-    """Calculate a recognition score based on multiple factors"""
-    base_score = (sentiment_score + 1) / 2
-    
-    high_value_tags = ["life_saving", "bravery", "de-escalation"]
-    tag_boost = sum(0.15 for tag in tags if tag in high_value_tags)
-    
-    length_boost = min(0.1, text_length / 1000 * 0.1)
-    
-    final_score = min(1.0, base_score + tag_boost + length_boost)
-    return round(final_score, 3)
+def map_to_gazetteers(ents: Dict[str, List[str]], gaz: Dict[str, List[str]], text: str) -> Dict[str, List[Dict]]:
+    mapped_officers, mapped_stations, mapped_districts = [], [], []
 
-def process_text(text: str, models_tuple) -> Dict:
-    """Process text through the entire pipeline"""
-    sentiment_analyzer, ner_model, summarizer, translator, qa_model = models_tuple
-    
-    # Translate if needed
-    original_text = text
-    translated_text, detected_lang = translate_to_english(text, translator)
-    
-    # Use translated text for processing
-    processing_text = translated_text if detected_lang != 'en' else original_text
-    
-    # Extract entities
-    entities = extract_officer_info(processing_text, ner_model)
-    
-    # Analyze sentiment
-    sentiment = analyze_sentiment_detailed(processing_text, sentiment_analyzer)
-    
-    # Extract tags
-    tags = extract_competency_tags(processing_text)
-    
-    # Generate summary
-    summary = generate_summary(processing_text, summarizer)
-    
-    # Calculate score
-    score = calculate_recognition_score(
-        sentiment['normalized_score'],
-        tags,
-        len(processing_text)
-    )
-    
-    result = {
-        "timestamp": datetime.now().isoformat(),
-        "original_text": original_text,
-        "detected_language": detected_lang,
-        "language_name": LANG_CODE_MAP.get(detected_lang, detected_lang.upper()),
-        "translated_text": translated_text if detected_lang != 'en' else None,
-        "summary": summary,
-        "extracted_officers": entities['officers'],
-        "extracted_departments": entities['departments'],
-        "extracted_locations": entities['locations'],
-        "sentiment_label": sentiment['label'],
-        "sentiment_score": sentiment['normalized_score'],
-        "suggested_tags": tags,
-        "recognition_score": score,
-        "text_length": len(processing_text)
+    for p in ents["persons"]:
+        hit, score = fuzzy_lookup(p, gaz["officers"], score_cutoff=90)
+        if hit:
+            mapped_officers.append({"text": p, "canonical": hit, "score": score})
+
+    # Consider ORGs and LOCs for stations and districts
+    candidates = set(ents["orgs"] + ents["locs"])
+    for c in candidates:
+        s_hit, s_score = fuzzy_lookup(c, gaz["stations"], score_cutoff=90)
+        if s_hit:
+            mapped_stations.append({"text": c, "canonical": s_hit, "score": s_score})
+        d_hit, d_score = fuzzy_lookup(c, gaz["districts"], score_cutoff=90)
+        if d_hit:
+            mapped_districts.append({"text": c, "canonical": d_hit, "score": d_score})
+
+    # Regex based hints for "Police Station" occurrences
+    for m in re.findall(r"([A-Z][a-zA-Z]+)\s+(?:Police\s+Station|PS|Thana)", text):
+        s_hit, s_score = fuzzy_lookup(m.strip(), gaz["stations"], score_cutoff=85)
+        if s_hit:
+            mapped_stations.append({"text": f"{m} Police Station", "canonical": s_hit, "score": s_score})
+
+    # Dedup by canonical field
+    def dedup(items, key="canonical"):
+        seen, out = set(), []
+        for it in sorted(items, key=lambda x: -x["score"]):
+            if it[key] not in seen:
+                out.append(it); seen.add(it[key])
+        return out
+
+    return {
+        "officers": dedup(mapped_officers),
+        "stations": dedup(mapped_stations),
+        "districts": dedup(mapped_districts),
     }
-    
-    return result
 
-def answer_question(question: str, context: str, qa_model) -> str:
-    """Answer questions about the processed text"""
-    try:
-        result = qa_model(question=question, context=context[:2000])
-        return result['answer']
-    except Exception as e:
-        return f"Unable to answer: {str(e)}"
+def summarize_text(text: str) -> str:
+    if len(text) < 120:
+        return text.strip()
+    out = SUMMARIZER(text[:1500], max_length=140, min_length=40, do_sample=False)
+    return out[0]["summary_text"].strip()
 
-# Main App
-def main():
-    st.markdown('<h1 class="main-header">🚔 Police Recognition Analytics Platform</h1>', unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div class="info-box">
-        <b>Welcome!</b> This platform uses AI to analyze public feedback, news articles, and social media posts 
-        to identify and recognize outstanding police work. Supports multiple languages including Odia, Hindi, Bengali, and more!
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Load models with progress
-    with st.spinner("🔄 Loading AI models... This may take a moment on first run."):
-        models = load_models()
-    
-    if models[0] is None:
-        st.error("Failed to load models. Please check your internet connection and try again.")
-        return
-    
-    # Sidebar
-    with st.sidebar:
-        st.image("https://img.icons8.com/fluency/96/police-badge.png", width=100)
-        st.title("Navigation")
-        
-        st.markdown("---")
-        st.subheader("📊 Statistics")
-        st.metric("Total Processed", len(st.session_state.processed_data))
-        
-        if st.session_state.processed_data:
-            avg_score = sum(d['recognition_score'] for d in st.session_state.processed_data) / len(st.session_state.processed_data)
-            st.metric("Avg Recognition Score", f"{avg_score:.2f}")
-        
-        st.markdown("---")
-        
-        st.subheader("🌐 Supported Languages")
-        st.write("• English")
-        st.write("• Hindi (हिंदी)")
-        st.write("• Odia (ଓଡ଼ିଆ)")
-        st.write("• Bengali (বাংলা)")
-        st.write("• Telugu (తెలుగు)")
-        st.write("• Tamil (தமிழ்)")
-        st.write("• Marathi (मराठी)")
-        st.write("• Gujarati (ગુજરાતી)")
-        st.write("• Kannada (ಕನ್ನಡ)")
-        st.write("• Malayalam (മലയാളം)")
-        st.write("• Punjabi (ਪੰਜਾਬੀ)")
-        st.write("• + 10 more!")
-        
-        st.markdown("---")
-        
-        if st.button("🗑️ Clear All Data", type="secondary"):
-            st.session_state.processed_data = []
-            st.session_state.chat_history = []
-            st.rerun()
-        
-        if st.button("💾 Export Data", type="primary"):
-            if st.session_state.processed_data:
-                df = pd.DataFrame(st.session_state.processed_data)
-                csv = df.to_csv(index=False)
-                st.download_button(
-                    "Download CSV",
-                    csv,
-                    "police_recognition_data.csv",
-                    "text/csv"
-                )
-    
-    # Main content tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📝 Process Feedback", "📊 Dashboard", "💬 Q&A Chat", "📈 Detailed View"])
-    
-    with tab1:
-        st.header("Process New Feedback")
-        
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            input_method = st.radio("Input Method:", ["Text Input", "File Upload"], horizontal=True)
-            
-            text_to_process = ""
-            
-            if input_method == "Text Input":
-                text_to_process = st.text_area(
-                    "Paste feedback, news article, or social media post (any language):",
-                    height=200,
-                    placeholder="Example: Officer Smith from the 14th Precinct showed incredible compassion...\n\nया Odia में: ଅଫିସର ସ୍ମିଥ ଏକ ହଜିଯାଇଥିବା ପିଲାକୁ ସାହାଯ୍ୟ କରିଥିଲେ...",
-                    key="text_input_main"
-                )
-            else:
-                uploaded_file = st.file_uploader(
-                    "Upload file (TXT, PDF)",
-                    type=['txt', 'pdf']
-                )
-                
-                if uploaded_file:
-                    if uploaded_file.type == "text/plain":
-                        text_to_process = uploaded_file.getvalue().decode("utf-8")
-                    elif uploaded_file.type == "application/pdf":
-                        try:
-                            import pdfplumber
-                            with pdfplumber.open(uploaded_file) as pdf:
-                                text_to_process = ""
-                                for page in pdf.pages:
-                                    text_to_process += page.extract_text() or ""
-                        except Exception as e:
-                            st.error(f"Error reading PDF: {str(e)}")
-                    
-                    if text_to_process:
-                        st.text_area("Extracted Text Preview:", text_to_process[:500] + "...", height=150, key="preview")
-        
-        with col2:
-            st.info("**🌍 Language Support:**\n- Automatic detection\n- Auto-translation to English\n- 20+ languages supported")
-            
-            st.success("**✨ Features:**\n✅ Sentiment Analysis\n✅ Entity Extraction\n✅ Auto-Summarization\n✅ Competency Tagging\n✅ Multi-language")
-        
-        if st.button("🚀 Process Feedback", type="primary", use_container_width=True):
-            if text_to_process and text_to_process.strip():
-                with st.spinner("🔍 Analyzing feedback..."):
-                    result = process_text(text_to_process, models)
-                    st.session_state.processed_data.append(result)
-                
-                st.markdown('<div class="success-box">✅ <b>Processing Complete!</b></div>', unsafe_allow_html=True)
-                
-                # Display results in columns
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    st.markdown(f"""
-                    <div class="metric-card">
-                        <h3>{result['recognition_score']}</h3>
-                        <p>Recognition Score</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                with col2:
-                    sentiment_emoji = "😊" if result['sentiment_label'] == 'POSITIVE' else "😐"
-                    st.markdown(f"""
-                    <div class="metric-card">
-                        <h3>{sentiment_emoji}</h3>
-                        <p>{result['sentiment_label']}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                with col3:
-                    st.markdown(f"""
-                    <div class="metric-card">
-                        <h3>{len(result['extracted_officers'])}</h3>
-                        <p>Officers Found</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                with col4:
-                    lang_name = result.get('language_name', 'EN')
-                    st.markdown(f"""
-                    <div class="metric-card">
-                        <h3>{lang_name}</h3>
-                        <p>Language</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                st.markdown("---")
-                
-                # Detailed results
-                with st.expander("📋 View Detailed Results", expanded=True):
-                    if result['translated_text']:
-                        st.warning(f"**Original text was in {result['language_name']} - Translated to English**")
-                        st.text_area("Original:", result['original_text'], height=100, key="orig_detail")
-                        st.text_area("Translated:", result['translated_text'], height=100, key="trans_detail")
-                    
-                    st.subheader("📝 Summary")
-                    st.info(result['summary'])
-                    
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.subheader("👮 Extracted Officers")
-                        if result['extracted_officers']:
-                            for officer in result['extracted_officers']:
-                                st.write(f"- {officer}")
-                        else:
-                            st.write("No specific officers mentioned")
-                        
-                        st.subheader("🏢 Departments")
-                        if result['extracted_departments']:
-                            for dept in result['extracted_departments']:
-                                st.write(f"- {dept}")
-                        else:
-                            st.write("No departments identified")
-                    
-                    with col2:
-                        st.subheader("🏷️ Competency Tags")
-                        for tag in result['suggested_tags']:
-                            st.write(f"- {tag.replace('_', ' ').title()}")
-                        
-                        st.subheader("📍 Locations")
-                        if result['extracted_locations']:
-                            for loc in result['extracted_locations']:
-                                st.write(f"- {loc}")
-                        else:
-                            st.write("No locations identified")
-                
-                # Export single result
-                st.download_button(
-                    "📥 Export This Result (JSON)",
-                    json.dumps(result, indent=2, ensure_ascii=False),
-                    f"recognition_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                    "application/json"
-                )
-            else:
-                st.warning("⚠️ Please enter or upload some text to process.")
-    
-    with tab2:
-        st.header("Recognition Dashboard")
-        
-        if st.session_state.processed_data:
-            df = pd.DataFrame(st.session_state.processed_data)
-            
-            # Summary metrics
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("Total Submissions", len(df))
-            with col2:
-                st.metric("Avg Score", f"{df['recognition_score'].mean():.2f}")
-            with col3:
-                positive_pct = (df['sentiment_label'] == 'POSITIVE').sum() / len(df) * 100
-                st.metric("Positive Feedback", f"{positive_pct:.1f}%")
-            with col4:
-                total_officers = sum(len(officers) for officers in df['extracted_officers'])
-                st.metric("Officers Recognized", total_officers)
-            
-            st.markdown("---")
-            
-            # Top officers
-            st.subheader("🏆 Top Recognized Officers")
-            all_officers = []
-            for officers in df['extracted_officers']:
-                all_officers.extend(officers)
-            
-            if all_officers:
-                officer_counts = pd.Series(all_officers).value_counts().head(10)
-                st.bar_chart(officer_counts)
-            else:
-                st.info("No officers identified yet in processed feedback.")
-            
-            # Tag distribution
-            st.subheader("📊 Competency Tag Distribution")
-            all_tags = []
-            for tags in df['suggested_tags']:
-                all_tags.extend(tags)
-            
-            if all_tags:
-                tag_counts = pd.Series(all_tags).value_counts()
-                st.bar_chart(tag_counts)
-            
-            # Recent submissions
-            st.subheader("📜 Recent Submissions")
-            for idx, row in df.tail(5).iterrows():
-                with st.expander(f"Submission {idx + 1} - Score: {row['recognition_score']} - Lang: {row.get('language_name', 'EN')}"):
-                    st.write(f"**Summary:** {row['summary']}")
-                    st.write(f"**Officers:** {', '.join(row['extracted_officers']) if row['extracted_officers'] else 'None identified'}")
-                    st.write(f"**Tags:** {', '.join(row['suggested_tags'])}")
-                    st.write(f"**Sentiment:** {row['sentiment_label']} ({row['sentiment_score']:.2f})")
-        else:
-            st.info("ℹ️ No data processed yet. Go to 'Process Feedback' tab to get started!")
-    
-    with tab3:
-        st.header("💬 Q&A Chat")
-        st.write("Ask questions about the processed feedback")
-        
-        if st.session_state.processed_data:
-            all_texts = " ".join([
-                d['translated_text'] if d['translated_text'] else d['original_text'] 
-                for d in st.session_state.processed_data
-            ])
-            
-            question = st.text_input(
-                "Ask a question:", 
-                placeholder="e.g., What acts of bravery were mentioned?",
-                key="qa_input"
-            )
-            
-            if st.button("Get Answer", type="primary"):
-                if question:
-                    with st.spinner("🤔 Thinking..."):
-                        answer = answer_question(question, all_texts[:2000], models[4])
-                        st.session_state.chat_history.append({"question": question, "answer": answer})
-                        st.rerun()
-            
-            # Display chat history
-            if st.session_state.chat_history:
-                st.markdown("---")
-                st.subheader("Chat History")
-                for i, chat in enumerate(reversed(st.session_state.chat_history)):
-                    st.markdown(f"**Q{len(st.session_state.chat_history) - i}:** {chat['question']}")
-                    st.info(f"**A:** {chat['answer']}")
-                    st.markdown("---")
-        else:
-            st.warning("⚠️ Please process some feedback first before using Q&A!")
-    
-    with tab4:
-        st.header("📈 Detailed Data View")
-        
-        if st.session_state.processed_data:
-            df = pd.DataFrame(st.session_state.processed_data)
-            
-            st.subheader("Complete Data Table")
-            
-            available_columns = df.columns.tolist()
-            default_cols = [col for col in ['timestamp', 'recognition_score', 'sentiment_label', 'language_name', 'extracted_officers', 'suggested_tags'] if col in available_columns]
-            
-            columns_to_show = st.multiselect(
-                "Select columns to display:",
-                available_columns,
-                default=default_cols
-            )
-            
-            if columns_to_show:
-                st.dataframe(df[columns_to_show], use_container_width=True)
-            
-            st.markdown("---")
-            st.subheader("📥 Export Options")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                csv = df.to_csv(index=False)
-                st.download_button(
-                    "📄 Download CSV",
-                    csv,
-                    "full_data.csv",
-                    "text/csv",
-                    use_container_width=True
-                )
-            
-            with col2:
-                json_data = df.to_json(orient='records', indent=2)
-                st.download_button(
-                    "📋 Download JSON",
-                    json_data,
-                    "full_data.json",
-                    "application/json",
-                    use_container_width=True
-                )
-        else:
-            st.info("ℹ️ No data available yet.")
+def analyze_sentiment(text: str) -> Dict:
+    out = SENTIMENT(text[:512])[0]
+    label = out["label"].upper()
+    score = out["score"]
+    normalized = score if label == "POSITIVE" else (-score if label == "NEGATIVE" else 0.0)
+    return {"label": label, "score": score, "normalized": normalized}
 
-if __name__ == "__main__":
-    main()
+def process_input(text: str) -> Dict:
+    text = text.strip()
+    summary = summarize_text(text)
+    sentiment = analyze_sentiment(text)
+    dates = extract_dates(text)
+    ipc_hits = extract_ipc(text, IPC_MAP)
+    ents = extract_entities_en(text)
+    mapped = map_to_gazetteers(ents, GAZ, text)
+
+    # Recognition score (transparent & simple for demo)
+    score = (0.4 * max(0.0, sentiment["normalized"])) \
+            + (0.3 if ipc_hits else 0.0) \
+            + (0.2 if mapped["officers"] else 0.0) \
+            + (0.1 if mapped["stations"] else 0.0)
+    score = round(min(1.0, max(0.0, score)), 3)
+
+    return {
+        "timestamp": datetime.now().isoformat(),
+        "input_length": len(text),
+        "summary": summary,
+        "sentiment": sentiment,
+        "dates": dates,
+        "ipc_hits": ipc_hits,
+        "entities": ents,
+        "mapped": mapped,
+        "recognition_score": score,
+        "raw_text": text
+    }
+
+# ---------------------------
+# PDF report generator
+# ---------------------------
+def build_pdf_report(record: Dict) -> BytesIO:
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter)
+    styles = getSampleStyleSheet()
+    title = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=20, textColor=colors.HexColor("#3B82F6"), alignment=1, spaceAfter=16)
+    h2 = ParagraphStyle('H2', parent=styles['Heading2'], fontSize=14, textColor=colors.HexColor("#8B5CF6"), spaceAfter=8)
+    normal = styles['Normal']
+
+    story = []
+    story.append(Paragraph("Police Recognition Summary", title))
+    story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal))
+    story.append(Spacer(1, 0.2*inch))
+
+    story.append(Paragraph("Extractive Summary", h2))
+    story.append(Paragraph(record.get("summary", ""), normal))
+    story.append(Spacer(1, 0.2*inch))
+
+    story.append(Paragraph("Key Metrics", h2))
+    data = [
+        ["Metric", "Value"],
+        ["Recognition Score", f"{record.get('recognition_score', 0)}"],
+        ["Sentiment", f"{record['sentiment']['label']} ({record['sentiment']['score']:.2f})"],
+        ["Dates", ", ".join(record.get("dates", [])) or "-"],
+        ["Text Length", str(record.get("input_length", 0))]
+    ]
+    tbl = Table(data, colWidths=[2.5*inch, 3.5*inch])
+    tbl.setStyle(TableStyle([
+        ('BACKGROUND',(0,0),(-1,0), colors.HexColor("#3B82F6")),
+        ('TEXTCOLOR',(0,0),(-1,0), colors.white),
+        ('GRID',(0,0),(-1,-1), 0.5, colors.grey),
+        ('BACKGROUND',(0,1),(-1,-1), colors.whitesmoke)
+    ]))
+    story.append(tbl)
+    story.append(Spacer(1, 0.2*inch))
+
+    story.append(Paragraph("Entities & Mapping", h2))
+    persons = ", ".join(record["entities"].get("persons", [])) or "-"
+    orgs = ", ".join(record["entities"].get("orgs", [])) or "-"
+    locs = ", ".join(record["entities"].get("locs", [])) or "-"
+    story.append(Paragraph(f"Persons: {persons}", normal))
+    story.append(Paragraph(f"Organizations: {orgs}", normal))
+    story.append(Paragraph(f"Locations: {locs}", normal))
+
+    mapped_off = ", ".join([m['canonical'] for m in record["mapped"]["officers"]]) or "-"
+    mapped_st = ", ".join([m['canonical'] for m in record["mapped"]["stations"]]) or "-"
+    mapped_di = ", ".join([m['canonical'] for m in record["mapped"]["districts"]]) or "-"
+    story.append(Paragraph(f"Matched Officers: {mapped_off}", normal))
+    story.append(Paragraph(f"Matched Stations: {mapped_st}", normal))
+    story.append(Paragraph(f"Matched Districts: {mapped_di}", normal))
+    story.append(Spacer(1, 0.2*inch))
+
+    story.append(Paragraph("IPC Matches", h2))
+    if record.get("ipc_hits"):
+        for h in record["ipc_hits"]:
+            story.append(Paragraph(f"- {h['label']} (Sections: {', '.join(h['sections']) or '-'})", normal))
+    else:
+        story.append(Paragraph("- None", normal))
+
+    doc.build(story)
+    buf.seek(0)
+    return buf
+
+# ---------------------------
+# Session State
+# ---------------------------
+if "records" not in st.session_state:
+    st.session_state["records"] = []
+
+# ---------------------------
+# Sidebar
+# ---------------------------
+with st.sidebar:
+    st.header("Navigation")
+    st.caption("English-only pipeline with NER, IPC normalization, sentiment, summary, and gazetteer fusion.")
+    st.markdown(f"<div class='card'><div class='kv'><span class='label'>Districts:</span> <span class='value'>{len(GAZ['districts'])}</span></div>"
+                f"<div class='kv'><span class='label'>Stations:</span> <span class='value'>{len(GAZ['stations'])}</span></div>"
+                f"<div class='kv'><span class='label'>Officers:</span> <span class='value'>{len(GAZ['officers'])}</span></div></div>", unsafe_allow_html=True)
+    st.markdown("---")
+    if FEEDBACK_DEF and st.button("Load Sample Feedback"):
+        if isinstance(FEEDBACK_DEF, list) and FEEDBACK_DEF:
+            joined = " ".join(item.get("text", "") for item in FEEDBACK_DEF[:10])
+            rec = process_input(joined)
+            st.session_state["records"].append(rec)
+            st.success("Loaded and analyzed sample feedback.")
+
+# ---------------------------
+# Main Tabs
+# ---------------------------
+tab1, tab2, tab3, tab4 = st.tabs(["📝 Process", "📊 Dashboard", "💬 Q&A", "📈 Export"])
+
+with tab1:
+    st.subheader("Process New Text or PDF")
+    col1, col2 = st.columns([2,1])
+    with col1:
+        mode = st.radio("Input Method", ["Text", "PDF"], horizontal=True)
+        text = ""
+        if mode == "Text":
+            text = st.text_area("Paste English text (article, report, feedback):", height=220, placeholder="Officer John Smith from Chandrasekharpur Police Station swiftly responded to the theft case...")
+        else:
+            up = st.file_uploader("Upload PDF", type=["pdf"])
+            if up:
+                try:
+                    with pdfplumber.open(up) as pdf:
+                        full = []
+                        for page in pdf.pages:
+                            full.append(page.extract_text() or "")
+                        text = "\n".join(full)
+                    st.text_area("Extracted Text Preview", text[:1000], height=220)
+                except Exception as e:
+                    st.error(f"PDF read error: {e}")
+
+    with col2:
+        st.markdown("<div class='info'>• English-only processing (no translation)<br>• Uses BERT NER, BART summarization, and fuzzy gazetteers<br>• IPC sections normalized from Odisha IPC field map</div>", unsafe_allow_html=True)
+        st.markdown("<div class='ok'>Tip: Mention officer ranks (SI/ASI/Inspector) and station names (PS/Police Station) for better recall.</div>", unsafe_allow_html=True)
+
+    st.markdown("---")
+    if st.button("🚀 Analyze", type="primary", use_container_width=True):
+        if text.strip():
+            rec = process_input(text)
+            st.session_state["records"].append(rec)
+            st.success("Analysis complete.")
+            # Show metrics
+            c1, c2, c3, c4 = st.columns(4)
+            c1.markdown(f"<div class='metric-card'><h2>{rec['recognition_score']}</h2><p>Score</p></div>", unsafe_allow_html=True)
+            c2.markdown(f"<div class='metric-card'><h2>{rec['sentiment']['label']}</h2><p>Sentiment</p></div>", unsafe_allow_html=True)
+            c3.markdown(f"<div class='metric-card'><h2>{len(rec['mapped']['officers'])}</h2><p>Officers</p></div>", unsafe_allow_html=True)
+            c4.markdown(f"<div class='metric-card'><h2>{len(rec['ipc_hits'])}</h2><p>IPC Hits</p></div>", unsafe_allow_html=True)
+
+            st.markdown("### Summary")
+            st.markdown(f"<div class='card'>{rec['summary']}</div>", unsafe_allow_html=True)
+
+            colA, colB = st.columns(2)
+            with colA:
+                st.markdown("#### Entities (raw)")
+                st.write({"persons": rec["entities"]["persons"][:15], "orgs": rec["entities"]["orgs"][:15], "locs": rec["entities"]["locs"][:15]})
+                st.markdown("#### Dates")
+                st.write(rec["dates"])
+            with colB:
+                st.markdown("#### Gazetteer Mapping")
+                st.write({"officers": rec["mapped"]["officers"], "stations": rec["mapped"]["stations"], "districts": rec["mapped"]["districts"]})
+                st.markdown("#### IPC Matches")
+                st.write(rec["ipc_hits"])
+        else:
+            st.warning("Please provide text or a PDF first.")
+
+with tab2:
+    st.subheader("Recognition Dashboard")
+    if st.session_state["records"]:
+        df = pd.DataFrame([{
+            "timestamp": r["timestamp"],
+            "score": r["recognition_score"],
+            "sentiment": r["sentiment"]["label"],
+            "officers": ", ".join([m["canonical"] for m in r["mapped"]["officers"]]),
+            "stations": ", ".join([m["canonical"] for m in r["mapped"]["stations"]]),
+            "districts": ", ".join([m["canonical"] for m in r["mapped"]["districts"]]),
+            "ipc": ", ".join([h["label"] for h in r["ipc_hits"]]),
+            "dates": ", ".join(r["dates"]),
+            "length": r["input_length"]
+        } for r in st.session_state["records"]])
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Analyses", len(df))
+        c2.metric("Avg Score", f"{df['score'].mean():.2f}")
+        c3.metric("Positive %", f"{(df['sentiment']=='POSITIVE').mean()*100:.1f}%")
+        c4.metric("Total Officers Referenced", int(df["officers"].astype(str).str.count(",").sum() + (df["officers"].astype(str)!="").sum()))
+
+        st.markdown("#### Recent Records")
+        st.dataframe(df.sort_values("timestamp", ascending=False), use_container_width=True, height=320)
+    else:
+        st.info("No records yet.")
+
+with tab3:
+    st.subheader("Q&A Over All Processed Text")
+    if st.session_state["records"]:
+        all_text = " ".join([r["raw_text"] for r in st.session_state["records"]])
+        q = st.text_input("Ask a question about the processed content:")
+        if st.button("Get Answer", type="primary"):
+            if q.strip():
+                ans = QA(question=q, context=all_text[:2000])
+                st.success(ans.get("answer", ""))
+            else:
+                st.warning("Enter a question first.")
+    else:
+        st.info("Process at least one text to enable Q&A.")
+
+with tab4:
+    st.subheader("Export")
+    if st.session_state["records"]:
+        # Single PDF for last record
+        last = st.session_state["records"][-1]
+        pdf_buf = build_pdf_report(last)
+        st.download_button("📄 Download PDF (latest)", data=pdf_buf, file_name=f"recognition_report_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf", mime="application/pdf", use_container_width=True)
+
+        # CSV & JSON (all)
+        out_df = pd.DataFrame(st.session_state["records"])
+        st.download_button("📄 Download CSV (all)", data=out_df.to_csv(index=False), file_name="all_records.csv", mime="text/csv", use_container_width=True)
+        st.download_button("📋 Download JSON (all)", data=json.dumps(st.session_state["records"], ensure_ascii=False, indent=2), file_name="all_records.json", mime="application/json", use_container_width=True)
+    else:
+        st.info("No data to export.")

@@ -3,8 +3,8 @@ transformers
 torch
 pandas
 numpy
-Pillow
 pdfplumber
 protobuf
 sentencepiece
-langdetect
+reportlab
+rapidfuzz
