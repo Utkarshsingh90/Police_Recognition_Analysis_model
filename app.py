@@ -58,7 +58,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-header">🚔 Police Recognition Analytics — English Only</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">🚔 Police Recognition Analytics</div>', unsafe_allow_html=True)
 
 # ---------------------------
 # Configurable file paths (relative to repo root)
@@ -414,7 +414,7 @@ if "records" not in st.session_state:
 # ---------------------------
 with st.sidebar:
     st.header("Navigation")
-    st.caption("English-only pipeline with NER, IPC normalization, sentiment, summary, and gazetteer fusion.")
+    st.caption("Pipeline with NER, IPC normalization, sentiment, summary, and gazetteer fusion.")
     st.markdown(f"<div class='card'><div class='kv'><span class='label'>Districts:</span> <span class='value'>{len(GAZ['districts'])}</span></div>"
                 f"<div class='kv'><span class='label'>Stations:</span> <span class='value'>{len(GAZ['stations'])}</span></div>"
                 f"<div class='kv'><span class='label'>Officers:</span> <span class='value'>{len(GAZ['officers'])}</span></div></div>", unsafe_allow_html=True)
@@ -438,7 +438,7 @@ with tab1:
         mode = st.radio("Input Method", ["Text", "PDF"], horizontal=True)
         text = ""
         if mode == "Text":
-            text = st.text_area("Paste English text (article, report, feedback):", height=220, placeholder="Officer John Smith from Chandrasekharpur Police Station swiftly responded to the theft case...")
+            text = st.text_area("Paste text (article, report, feedback):", height=220, placeholder="Officer John Smith from Chandrasekharpur Police Station swiftly responded to the theft case...")
         else:
             up = st.file_uploader("Upload PDF", type=["pdf"])
             if up:
@@ -453,7 +453,7 @@ with tab1:
                     st.error(f"PDF read error: {e}")
 
     with col2:
-        st.markdown("<div class='info'>• English-only processing (no translation)<br>• Uses BERT NER, BART summarization, and fuzzy gazetteers<br>• IPC sections normalized from Odisha IPC field map</div>", unsafe_allow_html=True)
+        st.markdown("<div class='info'>• Text processing<br>• Uses BERT NER, BART summarization, and fuzzy gazetteers<br>• IPC sections normalized from Odisha IPC field map</div>", unsafe_allow_html=True)
         st.markdown("<div class='ok'>Tip: Mention officer ranks (SI/ASI/Inspector) and station names (PS/Police Station) for better recall.</div>", unsafe_allow_html=True)
 
     st.markdown("---")
